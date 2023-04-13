@@ -4,6 +4,7 @@ Hedgehog is a simple drop-in replacement for memcached
 
 ## Building
 
+Get D compiler and tools for your OS [here](https://dlang.org/download.html).
 dub build
 
 ## Running
