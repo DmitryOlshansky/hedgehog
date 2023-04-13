@@ -12,6 +12,6 @@ dub build
 
 ## Under the hood
 
-Headgehog is an example project that utilizes the power of photon transparent fiber scheduler to make sychnronious I/O async.
+Headgehog is an example project that utilizes the power of photon transparent fiber scheduler to make synchronious I/O async.
 
 
