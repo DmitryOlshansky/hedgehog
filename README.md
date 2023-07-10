@@ -1,6 +1,6 @@
 # Headgehog
 
-Hedgehog is a simple drop-in replacement for memcached
+Hedgehog is a simple drop-in replacement for memcached.
 
 ## Building
 
