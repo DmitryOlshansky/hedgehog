@@ -7,6 +7,6 @@ import photon, memcached.server, redis;
 void main() {
     startloop();
     go(() => memcachedServer());
-    go(() => redisServer());
+    // go(() => redisServer());
     runFibers();
 }

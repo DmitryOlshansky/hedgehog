@@ -5,6 +5,8 @@ import std.algorithm, std.conv, std.exception;
 
 private:
 
+public enum MAX_KEY_LENGTH = 250;
+
 public enum Command {
     none, // initial value indicating invalid command
     // storage commands
@@ -19,7 +21,9 @@ public enum Command {
     gets,
     // get and touch
     gat,
-    gats
+    gats,
+    // deletion
+    delete_
 }
 
 Command commandFromString(const(char)[] commandName) {
@@ -44,6 +48,8 @@ Command commandFromString(const(char)[] commandName) {
         return Command.gat;
     case "gats":
         return Command.gats;
+    case "delete":
+        return Command.delete_;
     default:
         enforce(false, "Bad command name " ~ commandName);
         assert(0);
@@ -100,7 +106,7 @@ public struct Parser {
     State state = State.START_COMMAND_NAME;
 // parsed storage command variables
     Command command;
-    ubyte[] key;
+    ubyte[] key; // also used in delete command
     ushort flags;
     long exptime;
     size_t bytes;
@@ -139,7 +145,8 @@ public struct Parser {
         if (state == State.END) {
             command = Command.none;
             key = null;
-            keys = null;
+            keys = keys[0..0];
+            keys.assumeSafeAppend();
             flags = 0;
             exptime = 0;
             bytes = 0;

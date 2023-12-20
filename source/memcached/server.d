@@ -1,15 +1,45 @@
 module memcached.server;
 
-import memcached.parser;
+import memcached.parser, memcached.timer_queue;
+
+import core.atomic;
 
 import std.socket, std.stdio, std.exception, std.format;
 
 import photon, rewind.map;
 
-alias ObjectMap = Map!(immutable(ubyte)[], immutable(ubyte)[]);
+struct Entry {
+    immutable(ubyte)[] key; // to be able to delete from hashmap solely from Entry*
+    immutable(ubyte)[] data;
+    immutable long expTime;
+    immutable long casUnique;
+    // intrusive linked list
+    Entry* prev, next;
+}
+
+alias ObjectMap = Map!(immutable(ubyte)[], Entry*);
 
 __gshared ObjectMap hashmap = new ObjectMap();
-//immutable(ubyte)[][immutable(ubyte)[]] hashmap;
+__gshared TimerQueue!(Entry, unixTime, (Entry* e) {
+    debug writeln("Expired ", cast(string)e.key);
+    hashmap.removeIf(e.key, (ref Entry* actual) {
+        return actual == e;
+    });
+}) timerQueue;
+
+shared long casUniqueCounter = 0;
+
+long nextCasUnique() {
+    return atomicFetchAdd(casUniqueCounter, 1);
+}
+
+long expirationTime(long expTime) {
+    if (expTime <= 60*60*24*30) {
+        return timerQueue.currentTime() + expTime;
+    } else {
+        return expTime;
+    }
+}
 
 enum ERROR = "ERROR\r\n";
 enum CLIENT_ERROR = "CLIENT_ERROR %s\r\n";
@@ -28,19 +58,27 @@ void processCommand(Socket client) {
             auto cmd = parser.command;
             switch(cmd) with (Command) {
             case set:
-                hashmap[parser.key.idup] = parser.data.idup;
-                if (!parser.noReply) {
-                    client.send(STORED);
+                auto key = parser.key.idup;
+                auto data = parser.data.idup;
+                if (parser.exptime >= 0) {
+                    auto expires = expirationTime(parser.exptime);
+                    auto entry = new Entry(key, data, expires, nextCasUnique());
+                    hashmap[key] = entry;
+                    if (expires > 0) {
+                        timerQueue.schedule(entry);
+                    }
+                    if (!parser.noReply) {
+                        client.send(STORED);
+                    }
                 }
                 break;
             case get:
                 foreach (key; parser.keys) {
                     auto ik = cast(immutable ubyte[])key;
-                    debug writefln("Key %s", cast(string)ik);
                     auto val = ik in hashmap;
                     if (val != null) {
-                        client.send(format("VALUE %s %d %d\r\n", cast(string)ik, 1, val.length));
-                        client.send(*val);
+                        client.send(format("VALUE %s %d %d\r\n", cast(string)ik, 1, (*val).data.length));
+                        client.send((*val).data);
                         client.send("\r\n");
                     }
                 }
@@ -63,6 +101,8 @@ void memcachedServer() {
     server.setOption(SocketOptionLevel.SOCKET, SocketOption.REUSEADDR, true);
     server.bind(new InternetAddress("0.0.0.0", 11211));
     server.listen(1000);
+
+    timerQueue.start();
 
     debug writeln("Started server");
 
