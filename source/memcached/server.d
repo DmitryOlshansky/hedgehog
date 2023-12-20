@@ -34,7 +34,10 @@ long nextCasUnique() {
 }
 
 long expirationTime(long expTime) {
-    if (expTime <= 60*60*24*30) {
+    if (expTime == 0) {
+        return expTime;
+    }
+    else if (expTime <= 60*60*24*30) {
         return timerQueue.currentTime() + expTime;
     } else {
         return expTime;
@@ -63,9 +66,12 @@ void processCommand(Socket client) {
                 if (parser.exptime >= 0) {
                     auto expires = expirationTime(parser.exptime);
                     auto entry = new Entry(key, data, expires, nextCasUnique());
-                    hashmap[key] = entry;
+                    auto old = hashmap.put(key, entry);
                     if (expires > 0) {
                         timerQueue.schedule(entry);
+                    }
+                    if (old && old.expTime > 0) {
+                        timerQueue.deschedule(old);
                     }
                     if (!parser.noReply) {
                         client.send(STORED);
@@ -75,8 +81,8 @@ void processCommand(Socket client) {
             case get:
                 foreach (key; parser.keys) {
                     auto ik = cast(immutable ubyte[])key;
-                    auto val = ik in hashmap;
-                    if (val != null) {
+                    auto val = hashmap.getOrDefault(ik, null);
+                    if (val) {
                         client.send(format("VALUE %s %d %d\r\n", cast(string)ik, 1, (*val).data.length));
                         client.send((*val).data);
                         client.send("\r\n");
