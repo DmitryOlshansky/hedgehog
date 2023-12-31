@@ -1,4 +1,5 @@
 module memcached.parser;
+// https://github.com/memcached/memcached/blob/master/doc/protocol.txt
 
 static import std.ascii;
 import std.algorithm, std.conv, std.exception;
@@ -16,6 +17,9 @@ public enum Command {
     append,
     prepend,
     cas,
+    // increment/decrement
+    incr,
+    decr,
     // retrival commands
     get,
     gets,
@@ -40,6 +44,10 @@ Command commandFromString(const(char)[] commandName) {
         return Command.prepend;
     case "cas":
         return Command.cas;
+    case "incr":
+        return Command.incr;
+    case "decr":
+        return Command.decr;
     case "get":
         return Command.get;
     case "gets":
@@ -80,8 +88,12 @@ enum State {
     BYTES,
     START_CAS_UNIQUE,
     CAS_UNIQUE,
-    START_NOREPLY,
-    NOREPLY,
+    SET_START_NOREPLY,
+    SET_NOREPLY,
+    START_NOREPLY_END,
+    NOREPLY_END,
+    START_VALUE,
+    VALUE,
     DATA,
     END
 }
@@ -141,7 +153,6 @@ public struct Parser {
     }
 
     bool parse() {
-        import std.stdio;
         if (state == State.END) {
             command = Command.none;
             key = null;
@@ -183,6 +194,11 @@ public struct Parser {
                     state = NEXT_KEY;
                     keys ~= buf[start..pos];
                     goto case NEXT_KEY;
+                }
+                else if(command == Command.delete_) {
+                    key = buf[start..pos];
+                    state = START_NOREPLY_END;
+                    goto case START_NOREPLY_END;
                 }
                 else {
                     key = buf[start..pos];
@@ -233,8 +249,8 @@ public struct Parser {
                     goto case START_CAS_UNIQUE;
                 }
                 else {
-                    state = START_NOREPLY;
-                    goto case START_NOREPLY;
+                    state = SET_START_NOREPLY;
+                    goto case SET_START_NOREPLY;
                 }
             case START_CAS_UNIQUE:
                 if (!skipWs()) return false;
@@ -244,8 +260,8 @@ public struct Parser {
                 size_t start = pos;
                 if (!skipNonWs()) return false;
                 casUnqiue = to!long(cast(char[])buf[start..pos]);
-                goto case;
-            case START_NOREPLY:
+                goto case SET_START_NOREPLY;
+            case SET_START_NOREPLY:
                 if (!skipWs()) return false;
                 if (buf[pos] == '\r') {
                     if (pos+1 == buf.length) return false;
@@ -255,16 +271,36 @@ public struct Parser {
                     state = DATA;
                     goto case DATA;
                 } else {
-                    state = NOREPLY;
-                    goto case NOREPLY;
+                    state = SET_NOREPLY;
+                    goto case SET_NOREPLY;
                 }
-            case NOREPLY:
+            case SET_NOREPLY:
                 if (pos + 9 > buf.length) return false;
                 enforce(cast(char[])buf[pos..pos+9] == "noreply\r\n");
                 noReply = true;
                 pos += 9;
                 state = DATA;
-                goto case;
+                goto case DATA;
+            case START_NOREPLY_END:
+                if (!skipWs()) return false;
+                if (buf[pos] == '\r') {
+                    if (pos+1 == buf.length) return false;
+                    enforce(buf[pos+1] == '\n');
+                    pos+=2;
+                    noReply = false;
+                    state = END;
+                    goto case END;
+                } else {
+                    state = NOREPLY_END;
+                    goto case NOREPLY_END;
+                }
+            case NOREPLY_END:
+                if (pos + 9 > buf.length) return false;
+                enforce(cast(char[])buf[pos..pos+9] == "noreply\r\n");
+                noReply = true;
+                pos += 9;
+                state = END;
+                goto case END;
             case DATA:
                 if (pos + bytes + 2 > buf.length) return false;
                 data = buf[pos..pos+bytes];
@@ -302,6 +338,16 @@ unittest {
 }
 
 unittest {
+    string command = "get k1 k2\r\n";
+    Parser parser;
+    parser.feed(cast(const(ubyte)[])command);
+    assert(parser.parse());
+    assert(parser.keys.length == 2);
+    assert(cast(string)parser.keys[0] == "k1");
+    assert(cast(string)parser.keys[1] == "k2");
+}
+
+unittest {
     string command = "set key 1 2 3\r\nval\r\n";
     Parser parser;
     parser.feed(cast(const(ubyte)[])command);
@@ -331,4 +377,18 @@ unittest {
     Parser parser;
     parser.feed(buf);
     assert(parser.parse());
+}
+
+unittest {
+    string command = "delete key\r\ndelete key2 noreply\r\n";
+    Parser parser;
+    parser.feed(cast(const(ubyte)[])command);
+    assert(parser.parse());
+    assert(parser.command == Command.delete_);
+    assert(cast(string)parser.key == "key");
+    assert(!parser.noReply);
+    assert(parser.parse());
+    assert(parser.command == Command.delete_);
+    assert(cast(string)parser.key == "key2");
+    assert(parser.noReply);
 }

@@ -49,57 +49,72 @@ enum CLIENT_ERROR = "CLIENT_ERROR %s\r\n";
 enum SERVER_ERROR = "SERVER_ERROR %s\r\n";
 enum STORED = "STORED\r\n";
 
-void processCommand(Socket client) {
-    ubyte[] buffer = new ubyte[8096];
-    Parser parser;
-    for(;;) {
-        auto size = client.receive(buffer);
-        if (size == 0) break;
-        enforce(size > 0);
-        parser.feed(buffer[0..size]);
-        while (parser.parse()) {
-            auto cmd = parser.command;
-            switch(cmd) with (Command) {
-            case set:
-                auto key = parser.key.idup;
-                auto data = parser.data.idup;
-                if (parser.exptime >= 0) {
-                    auto expires = expirationTime(parser.exptime);
-                    auto entry = new Entry(key, data, expires, nextCasUnique());
-                    auto old = hashmap.put(key, entry);
-                    if (expires > 0) {
-                        timerQueue.schedule(entry);
-                    }
-                    if (old && old.expTime > 0) {
-                        timerQueue.deschedule(old);
-                    }
-                    if (!parser.noReply) {
-                        client.send(STORED);
-                    }
-                }
-                break;
-            case get:
-                foreach (key; parser.keys) {
-                    auto ik = cast(immutable ubyte[])key;
-                    auto val = hashmap.getOrDefault(ik, null);
-                    if (val) {
-                        client.send(format("VALUE %s %d %d\r\n", cast(string)ik, 1, (*val).data.length));
-                        client.send((*val).data);
-                        client.send("\r\n");
-                    }
-                }
-                client.send("END\r\n");
-                break;
-            default:
-                client.send(SERVER_ERROR.format("Unimplemented"));
+void processCommand(const ref Parser parser, Socket client) {
+    auto cmd = parser.command;
+    switch(cmd) with (Command) {
+    case set:
+        auto key = parser.key.idup;
+        auto data = parser.data.idup;
+        if (parser.exptime >= 0) {
+            auto expires = expirationTime(parser.exptime);
+            auto entry = new Entry(key, data, expires, nextCasUnique());
+            auto old = hashmap.put(key, entry);
+            if (expires > 0) {
+                timerQueue.schedule(entry);
+            }
+            if (old && old.expTime > 0) {
+                timerQueue.deschedule(old);
+            }
+            if (!parser.noReply) {
+                client.send(STORED);
             }
         }
+        break;
+    case get:
+        foreach (key; parser.keys) {
+            auto ik = cast(immutable ubyte[])key;
+            auto val = hashmap.getOrDefault(ik, null);
+            if (val) {
+                client.send(format("VALUE %s %d %d\r\n", cast(string)ik, 1, (*val).data.length));
+                client.send((*val).data);
+                client.send("\r\n");
+            }
+        }
+        client.send("END\r\n");
+        break;
+    case delete_:
+        auto val = hashmap.remove(cast(immutable ubyte[])parser.key);
+        if (val != null) {
+            if (val.expTime > 0) {
+                timerQueue.deschedule(val);
+            }
+        }
+        break;
+    default:
+        client.send(SERVER_ERROR.format("Unimplemented"));
     }
 }
 
-// https://github.com/memcached/memcached/blob/master/doc/protocol.txt
 void serverWorker(Socket client) {
-    processCommand(client);
+    ubyte[] buffer = new ubyte[8096];
+    Parser parser;
+    try {
+        for(;;) {
+            auto size = client.receive(buffer);
+            if (size == 0) {
+                client.close();
+                break;
+            }
+            enforce(size > 0);
+            parser.feed(buffer[0..size]);
+            while (parser.parse())
+                processCommand(parser, client);
+        }
+    }
+    catch (Exception e) {
+        writeln(e);
+        client.close();
+    }
 }
 
 void memcachedServer() {
