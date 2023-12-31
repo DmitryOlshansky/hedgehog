@@ -23,6 +23,8 @@ public enum Command {
     // retrival commands
     get,
     gets,
+    // touch
+    touch,
     // get and touch
     gat,
     gats,
@@ -52,6 +54,8 @@ Command commandFromString(const(char)[] commandName) {
         return Command.get;
     case "gets":
         return Command.gets;
+    case "touch":
+        return Command.touch;
     case "gat":
         return Command.gat;
     case "gats":
@@ -86,6 +90,10 @@ enum State {
     EXPTIME,
     START_BYTES,
     BYTES,
+    EXPTIME_TOUCH_START,
+    EXPTIME_TOUCH,
+    EXPTIME_GATS_START,
+    EXPTIME_GATS,
     START_CAS_UNIQUE,
     CAS_UNIQUE,
     SET_START_NOREPLY,
@@ -109,6 +117,15 @@ bool[256] computeIsWhiteTable() {
     return table;
 }
 
+unittest {
+    bool[256] table = computeIsWhiteTable();
+    size_t cnt = 0;
+    foreach (c; 0..256) {
+        cnt += table[c];
+    }
+    assert(cnt == 4);
+}
+
 bool isWhite(ubyte c) { return isWhiteTable[c]; }
 
 public struct Parser {
@@ -125,6 +142,8 @@ public struct Parser {
     long casUnqiue;
     bool noReply;
     ubyte[] data;
+// incr/decr value
+    ulong value;
 // parsed get/gets command variables
     ubyte[][] keys;
     
@@ -181,6 +200,10 @@ public struct Parser {
                 size_t start = pos;
                 if (!skipNonWs()) return false;
                 command = commandFromString(cast(char[])buf[start..pos]);
+                if (command == Command.gat || command == Command.gats) {
+                    state = EXPTIME_GATS_START;
+                    goto case EXPTIME_GATS_START;
+                }
                 state = START_KEY;
                 goto case;
             case START_KEY:
@@ -190,15 +213,26 @@ public struct Parser {
             case KEY:
                 size_t start = pos;
                 if (!skipNonWs()) return false;
-                if (command == Command.get || command == Command.gets) {
+                if (command == Command.get || command == Command.gets
+                    || command == Command.gat || command == Command.gats) {
                     state = NEXT_KEY;
                     keys ~= buf[start..pos];
                     goto case NEXT_KEY;
                 }
-                else if(command == Command.delete_) {
+                else if (command == Command.delete_) {
                     key = buf[start..pos];
                     state = START_NOREPLY_END;
                     goto case START_NOREPLY_END;
+                }
+                else if (command == Command.incr || command == Command.decr) {
+                    key = buf[start..pos];
+                    state = START_VALUE;
+                    goto case START_VALUE;
+                }
+                else if (command == Command.touch) {
+                    key = buf[start..pos];
+                    state = EXPTIME_TOUCH_START;
+                    goto case EXPTIME_TOUCH_START;
                 }
                 else {
                     key = buf[start..pos];
@@ -216,6 +250,26 @@ public struct Parser {
                 }
                 state = KEY;
                 goto case KEY;
+            case EXPTIME_TOUCH_START:
+                if (!skipWs()) return false;
+                state = EXPTIME_TOUCH;
+                goto case EXPTIME_TOUCH;
+            case EXPTIME_TOUCH:
+                size_t start = pos;
+                if (!skipNonWs()) return false;
+                exptime = to!long(cast(char[])buf[start..pos]);
+                state = START_NOREPLY_END;
+                goto case START_NOREPLY_END;
+            case EXPTIME_GATS_START:
+                if (!skipWs()) return false;
+                state = EXPTIME_GATS;
+                goto case EXPTIME_GATS;
+            case EXPTIME_GATS:
+                size_t start = pos;
+                if (!skipNonWs()) return false;
+                exptime = to!long(cast(char[])buf[start..pos]);
+                state = START_KEY;
+                goto case START_KEY;
             case START_FLAGS:
                 if (!skipWs()) return false;
                 state = FLAGS;
@@ -260,6 +314,7 @@ public struct Parser {
                 size_t start = pos;
                 if (!skipNonWs()) return false;
                 casUnqiue = to!long(cast(char[])buf[start..pos]);
+                state = SET_START_NOREPLY;
                 goto case SET_START_NOREPLY;
             case SET_START_NOREPLY:
                 if (!skipWs()) return false;
@@ -281,6 +336,16 @@ public struct Parser {
                 pos += 9;
                 state = DATA;
                 goto case DATA;
+            case START_VALUE:
+                if (!skipWs()) return false;
+                state = VALUE;
+                goto case;
+            case VALUE:
+                size_t start = pos;
+                if(!skipNonWs()) return false;
+                value = to!ulong(cast(char[])buf[start..pos]);
+                state = START_NOREPLY_END;
+                goto case START_NOREPLY_END;
             case START_NOREPLY_END:
                 if (!skipWs()) return false;
                 if (buf[pos] == '\r') {
@@ -317,78 +382,179 @@ public struct Parser {
     }
 }
 
-
-unittest {
-    string command = "set some_key 0 0 10 noreply\r\nsome_value\r\nget some_key\r\n";
-    Parser parser;
-    parser.feed(cast(const(ubyte)[])command);
-    assert(parser.parse());
-    assert(parser.command == Command.set);
-    assert(cast(string)parser.key == "some_key");
-    assert(parser.flags == 0);
-    assert(parser.exptime == 0);
-    assert(parser.bytes == 10);
-    assert(parser.noReply == true);
-    assert(cast(string)parser.data == "some_value");
-
-    assert(parser.parse());
-    assert(parser.command == Command.get);
-    assert(parser.keys.length == 1);
-    assert(cast(string)parser.keys[0] == "some_key");
-}
-
-unittest {
-    string command = "get k1 k2\r\n";
-    Parser parser;
-    parser.feed(cast(const(ubyte)[])command);
-    assert(parser.parse());
-    assert(parser.keys.length == 2);
-    assert(cast(string)parser.keys[0] == "k1");
-    assert(cast(string)parser.keys[1] == "k2");
-}
-
-unittest {
-    string command = "set key 1 2 3\r\nval\r\n";
-    Parser parser;
-    parser.feed(cast(const(ubyte)[])command);
-    assert(parser.parse());
-    assert(parser.command == Command.set);
-    assert(parser.flags == 1);
-    assert(parser.exptime == 2);
-    assert(cast(string)parser.data == "val");
-}
-
-unittest {
-    string command = "set key 1 2 3\r\nval\r\n";
-    Parser parser;
-    size_t i = 0;
-    while (!parser.parse()) {
-        parser.feed(cast(const(ubyte)[])command[i..i+1]);
-        i++;
+version(unittest) {
+    void testParse(T)(T[] command, scope void delegate(Parser)[] dgs...) {
+        Parser parser;
+        // feed all at once
+        parser.feed(cast(const(ubyte)[])command);
+        foreach (dg; dgs) {
+            assert(parser.parse());
+            dg(parser);
+        }
+        size_t i = 0;
+        // feed by byte at a time
+        foreach (dg; dgs) {
+            while (!parser.parse()) {
+                parser.feed(cast(const(ubyte)[])command[i..i+1]);
+                i++;
+            }
+            dg(parser);
+        }
     }
-    assert(cast(string)parser.key == "key");
-    assert(parser.flags == 1);
-    assert(parser.exptime == 2);
-    assert(cast(string)parser.data == "val");
+}
+
+
+unittest {
+    testParse(
+        "add key 0 0 1\r\nA\r\nreplace key 0 1 1 noreply\r\nB\r\n"
+        ~ "append key 1 1 1 noreply\r\nC\r\nprepend key 0 0 1\r\nD\r\n", (parser) {
+        assert(parser.command == Command.add);
+        assert(cast(string)parser.key == "key");
+        assert(parser.flags == 0);
+        assert(parser.exptime == 0);
+        assert(!parser.noReply);
+        assert(cast(string)parser.data == "A");
+    }, (parser) {
+        assert(parser.command == Command.replace);
+        assert(cast(string)parser.key == "key");
+        assert(parser.flags == 0);
+        assert(parser.exptime == 1);
+        assert(parser.noReply);
+        assert(cast(string)parser.data == "B");
+    }, (parser) {
+        assert(parser.command == Command.append);
+        assert(cast(string)parser.key == "key");
+        assert(parser.flags == 1);
+        assert(parser.exptime == 1);
+        assert(parser.noReply);
+        assert(cast(string)parser.data == "C");
+    }, (parser) {
+        assert(parser.command == Command.prepend);
+        assert(cast(string)parser.key == "key");
+        assert(parser.flags == 0);
+        assert(parser.exptime == 0);
+        assert(!parser.noReply);
+        assert(cast(string)parser.data == "D");
+    });
 }
 
 unittest {
-    ubyte[] buf = [115, 101, 116, 32, 97, 98, 99, 32, 49, 32, 49, 32, 50, 13, 10, 49, 50, 13, 10];
-    Parser parser;
-    parser.feed(buf);
-    assert(parser.parse());
+    testParse("set some_key 0 0 10 noreply\r\nsome_value\r\ngets some_key\r\n", (parser) {
+        assert(parser.command == Command.set);
+        assert(cast(string)parser.key == "some_key");
+        assert(parser.flags == 0);
+        assert(parser.exptime == 0);
+        assert(parser.bytes == 10);
+        assert(parser.noReply == true);
+        assert(cast(string)parser.data == "some_value");
+    }, (parser) {
+        assert(parser.command == Command.gets);
+        assert(parser.keys.length == 1);
+        assert(cast(string)parser.keys[0] == "some_key");
+    });
 }
 
 unittest {
-    string command = "delete key\r\ndelete key2 noreply\r\n";
-    Parser parser;
-    parser.feed(cast(const(ubyte)[])command);
-    assert(parser.parse());
-    assert(parser.command == Command.delete_);
-    assert(cast(string)parser.key == "key");
-    assert(!parser.noReply);
-    assert(parser.parse());
-    assert(parser.command == Command.delete_);
-    assert(cast(string)parser.key == "key2");
-    assert(parser.noReply);
+    testParse("get k1 k2\r\n", (parser) {
+        assert(parser.keys.length == 2);
+        assert(cast(string)parser.keys[0] == "k1");
+        assert(cast(string)parser.keys[1] == "k2");
+    });
+}
+
+unittest {
+    testParse("set key 1 2 3\r\nval\r\n", (parser) {
+        assert(parser.command == Command.set);
+        assert(parser.flags == 1);
+        assert(parser.exptime == 2);
+        assert(cast(string)parser.data == "val");
+    });
+}
+
+unittest {
+    ubyte[] command = [115, 101, 116, 32, 97, 98, 99, 32, 49, 32, 49, 32, 50, 13, 10, 49, 50, 13, 10];
+    testParse(command, (parser) {
+    });
+}
+
+unittest {
+    testParse("delete key\r\ndelete key2 noreply\r\n", (parser) {
+        assert(parser.command == Command.delete_);
+        assert(cast(string)parser.key == "key");
+        assert(!parser.noReply);
+    }, (parser) {
+        assert(parser.command == Command.delete_);
+        assert(cast(string)parser.key == "key2");
+        assert(parser.noReply);
+    });
+}
+
+unittest {
+    testParse("incr key 2\r\nincr key2 3 noreply\r\ndecr key3 4000000000\r\ndecr key4 1 noreply\r\n", (parser) {
+        assert(parser.command == Command.incr);
+        assert(cast(string)parser.key == "key");
+        assert(parser.value == 2);
+        assert(!parser.noReply);
+    }, (parser) {
+        assert(parser.command == Command.incr);
+        assert(cast(string)parser.key == "key2");
+        assert(parser.value == 3);
+        assert(parser.noReply);
+    }, (parser) { 
+        assert(parser.command == Command.decr);
+        assert(cast(string)parser.key == "key3");
+        assert(parser.value == 4_000_000_000);
+        assert(!parser.noReply);
+    }, (parser) {
+        assert(parser.command == Command.decr);
+        assert(cast(string)parser.key == "key4");
+        assert(parser.value == 1);
+        assert(parser.noReply);
+    });
+}
+
+unittest {
+    testParse("touch k 12 noreply\r\ntouch k2 23\r\n", (parser) {
+        assert(parser.command == Command.touch);
+        assert(cast(string)parser.key == "k");
+        assert(parser.exptime == 12);
+        assert(parser.noReply);
+    }, (parser) {
+        assert(parser.command == Command.touch);
+        assert(cast(string)parser.key == "k2");
+        assert(parser.exptime == 23);
+        assert(!parser.noReply);
+    });
+}
+
+unittest {
+    testParse("gat 12 key1 key2\r\ngats 23 key3\r\n", (parser) {
+        assert(parser.command == Command.gat);
+        assert(cast(string[])parser.keys == ["key1", "key2"]);
+        assert(parser.exptime == 12);
+    }, (parser) {
+        assert(parser.command == Command.gats);
+        assert(cast(string[])parser.keys == ["key3"]);
+        assert(parser.exptime == 23);
+    });
+}
+
+unittest {
+    testParse("cas key 0 1 5 321\r\nvalue\r\ncas key 0 1 5 123 noreply\r\nvalue\r\n", (parser) {
+        assert(parser.command == Command.cas);
+        assert(cast(string)parser.key == "key");
+        assert(parser.flags == 0);
+        assert(parser.exptime == 1);
+        assert(cast(string)parser.data == "value");
+        assert(!parser.noReply);
+        assert(parser.casUnqiue == 321);
+    }, (parser) {
+        assert(parser.command == Command.cas);
+        assert(cast(string)parser.key == "key");
+        assert(parser.flags == 0);
+        assert(parser.exptime == 1);
+        assert(cast(string)parser.data == "value");
+        assert(parser.noReply);
+        assert(parser.casUnqiue == 123);
+    });
 }
