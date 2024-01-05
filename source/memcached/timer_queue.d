@@ -87,11 +87,11 @@ public struct TimerQueue(T, alias time, alias onExpiration) {
         timerSlots[slot] = null;
         while (list != null) {
             T* item = list;
-            list = remove(list, item);
+            list = remove!""(list, item);
             if (item.expTime == current)
                 onExpiration(item);
             else
-                newList = insert(newList, item);
+                newList = insertFront!""(newList, item);
         }
         timerSlots[slot] = newList;
     }
@@ -122,11 +122,11 @@ public struct TimerQueue(T, alias time, alias onExpiration) {
                 case ADD:
                     assert(reversed.item.next == null);
                     assert(reversed.item.prev == null);
-                    timerSlots[slot] = insert(timerSlots[slot], reversed.item);
+                    timerSlots[slot] = insertFront!""(timerSlots[slot], reversed.item);
                     break;
                 case REMOVE:
                     assert(reversed.item.next != null);
-                    timerSlots[slot] = remove(timerSlots[slot], reversed.item);
+                    timerSlots[slot] = remove!""(timerSlots[slot], reversed.item);
                     break;
                 }
             }

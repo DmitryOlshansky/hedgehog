@@ -558,3 +558,15 @@ unittest {
         assert(parser.casUnqiue == 123);
     });
 }
+
+unittest {
+    Parser parser;
+    parser.feed(cast(const(ubyte)[])"some ");
+    try {
+        parser.parse();
+        assert(false);
+    }
+    catch (Exception e) {
+        assert(e.message == "Bad command name " ~ "some");
+    }
+}

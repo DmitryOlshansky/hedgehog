@@ -1,21 +1,12 @@
 module memcached.server;
 
-import memcached.parser, memcached.timer_queue;
+import memcached.parser, memcached.timer_queue, memcached.entry, memcached.lru;
 
 import core.atomic;
 
 import std.socket, std.stdio, std.exception, std.format;
 
 import photon, rewind.map;
-
-struct Entry {
-    immutable(ubyte)[] key; // to be able to delete from hashmap solely from Entry*
-    immutable(ubyte)[] data;
-    immutable long expTime;
-    immutable long casUnique;
-    // intrusive linked list
-    Entry* prev, next;
-}
 
 alias ObjectMap = Map!(immutable(ubyte)[], Entry*);
 
@@ -26,6 +17,7 @@ __gshared TimerQueue!(Entry, unixTime, (Entry* e) {
         return actual == e;
     });
 }) timerQueue;
+__gshared Lru lru;
 
 shared long casUniqueCounter = 0;
 
@@ -34,7 +26,7 @@ long nextCasUnique() {
 }
 
 long expirationTime(long expTime) {
-    if (expTime == 0) {
+    if (expTime <= 0) {
         return expTime;
     }
     else if (expTime <= 60*60*24*30) {
@@ -117,11 +109,12 @@ void serverWorker(Socket client) {
     }
 }
 
-void memcachedServer() {
+void memcachedServer(size_t maxSize, ushort port, int backlog) {
+    lru = Lru(maxSize);
     Socket server = new TcpSocket();
     server.setOption(SocketOptionLevel.SOCKET, SocketOption.REUSEADDR, true);
-    server.bind(new InternetAddress("0.0.0.0", 11211));
-    server.listen(1000);
+    server.bind(new InternetAddress("0.0.0.0", port));
+    server.listen(backlog);
 
     timerQueue.start();
 

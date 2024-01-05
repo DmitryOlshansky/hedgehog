@@ -1,38 +1,76 @@
 module common.intrusive_queue;
 
-enum isIntrusive(T) = __traits(compiles, () {
+enum isIntrusive(T, string suffix) = __traits(compiles, () {
     T t;
-    t.next = &t;
-    t.prev = &t;
+    mixin("t.next"~suffix) = &t;
+    mixin("t.prev"~suffix) = &t;
 });
 
-T* insert(T)(T* list, T* item) 
-if (isIntrusive!T) {
+T* insertFront(string suffix, T)(T* list, T* item) 
+if (isIntrusive!(T, suffix)) {
     if (list == null) {
-        item.next = item;
-        item.prev = item;
-    } else {
-        item.prev = list.prev;
-        item.next = list;
-        list.prev = item;
+        mixin("item.next"~suffix) = item;
+        mixin("item.prev"~suffix) = item;
+    }
+    else {
+        mixin("item.prev"~suffix) = mixin("list.prev"~suffix);
+        mixin("item.next"~suffix) = list;
+        mixin("list.prev"~suffix~".next"~suffix) = item;
+        mixin("list.prev"~suffix) = item;
     }
     return item;
 }
 
-T* remove(T)(T* list, T* item)
-if (isIntrusive!T) {
-    auto next = item.next;
-    auto prev = item.prev;
+T* insertBack(string suffix, T)(T* list, T* item)
+if (isIntrusive!(T, suffix)) {
+    if (list == null) {
+        mixin("item.next"~suffix) = item;
+        mixin("item.prev"~suffix) = item;
+        return item;
+    }
+    else {
+        mixin("item.prev"~suffix) = mixin("list.prev"~suffix);
+        mixin("item.next"~suffix) = list;
+        mixin("list.prev"~suffix~".next"~suffix) = item;
+        mixin("list.prev"~suffix) = item;
+        return list;
+    }
+}
+
+
+T* remove(string suffix, T)(T* list, T* item)
+if (isIntrusive!(T, suffix)) {
+    auto next = mixin("item.next"~suffix);
+    auto prev = mixin("item.prev"~suffix);
+    mixin("item.next"~suffix) = null;
+    mixin("item.prev"~suffix) = null;
     if (next == item) {
-        item.next = null;
-        item.prev = null;
         return null;
-    } else {
-        next.prev = prev;
-        prev.next = next;
-        item.next = null;
-        item.prev = null;
-        return next;
+    }
+    else {
+        mixin("next.prev"~suffix) = prev;
+        mixin("prev.next"~suffix) = next;
+        if (item == list) {
+            return next;
+        }
+        else {
+            return list;
+        }
+    }
+}
+
+version(unittest) {
+    Node*[] toArray(string suffix, Node)(Node* list) {
+        Node*[] items;
+        Node* head = list;
+        if (head == null)
+            return items;
+        Node* cur = head;
+        do {
+            items ~= cur;
+            cur = mixin("cur.next"~suffix);
+        } while(cur != head);
+        return items;
     }
 }
 
@@ -42,12 +80,43 @@ unittest {
         Node* prev, next;
     }
     Node* list;
-    list = insert(list, new Node(1));
+    list = insertFront!""(list, new Node(1));
     assert(list.value == 1);
-    list = insert(list, new Node(2));
+    list = insertFront!""(list, new Node(2));
     assert(list.value == 2);
-    list = remove(list, list);
+    list = remove!""(list, list);
     assert(list.value == 1);
-    list = remove(list, list);
+    list = remove!""(list, list);
     assert(list == null);
+}
+
+unittest {
+    import std.algorithm, std.array, std.meta;
+    foreach (suffix; AliasSeq!("", "2")) {
+        static struct Node {
+            int value;
+            mixin("Node* prev"~suffix~", next"~suffix~";");
+        }
+        Node* list;
+        list = insertBack!suffix(list, new Node(1));
+        assert(list.value == 1);
+        list = insertBack!suffix(list, new Node(2));
+        assert(list.value == 1);
+        list = insertBack!suffix(list, new Node(3));
+        assert(list.value == 1);
+        list = remove!suffix(list, list);
+        assert(list.value == 2);
+        list = remove!suffix(list, list);
+        assert(list.value == 3);
+        list = remove!suffix(list, list);
+        assert(list == null);
+
+        Node* f = new Node(1), m = new Node(2), t = new Node(3);
+        list = insertBack!suffix(list, f);
+        list = insertBack!suffix(list, m);
+        list = insertBack!suffix(list, t);
+        remove!suffix(list, m);
+        auto items = list.toArray!suffix;
+        assert(items.map!(x => x.value).array == [1, 3]);
+    }
 }
