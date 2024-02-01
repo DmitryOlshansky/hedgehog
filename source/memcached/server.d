@@ -1,6 +1,6 @@
 module memcached.server;
 
-import memcached.parser, memcached.timer_queue, memcached.entry, memcached.lru;
+import memcached.parser, memcached.sched, memcached.entry, memcached.lru;
 
 import core.atomic;
 
@@ -11,13 +11,12 @@ import photon, rewind.map;
 alias ObjectMap = Map!(immutable(ubyte)[], Entry*);
 
 __gshared ObjectMap hashmap = new ObjectMap();
-__gshared TimerQueue!(Entry, unixTime, (Entry* e) {
+__gshared Sched!(Entry, unixTime, (Entry* e) {
     debug writeln("Expired ", cast(string)e.key);
     hashmap.removeIf(e.key, (ref Entry* actual) {
         return actual == e;
     });
-}) timerQueue;
-__gshared Lru lru;
+}) sched;
 
 shared long casUniqueCounter = 0;
 
@@ -30,7 +29,7 @@ long expirationTime(long expTime) {
         return expTime;
     }
     else if (expTime <= 60*60*24*30) {
-        return timerQueue.currentTime() + expTime;
+        return sched.currentTime() + expTime;
     } else {
         return expTime;
     }
@@ -52,10 +51,10 @@ void processCommand(const ref Parser parser, Socket client) {
             auto entry = new Entry(key, data, expires, nextCasUnique());
             auto old = hashmap.put(key, entry);
             if (expires > 0) {
-                timerQueue.schedule(entry);
+                sched.schedule(entry);
             }
             if (old && old.expTime > 0) {
-                timerQueue.deschedule(old);
+                sched.deschedule(old);
             }
             if (!parser.noReply) {
                 client.send(STORED);
@@ -78,7 +77,7 @@ void processCommand(const ref Parser parser, Socket client) {
         auto val = hashmap.remove(cast(immutable ubyte[])parser.key);
         if (val != null) {
             if (val.expTime > 0) {
-                timerQueue.deschedule(val);
+                sched.deschedule(val);
             }
         }
         break;
@@ -110,13 +109,12 @@ void serverWorker(Socket client) {
 }
 
 void memcachedServer(size_t maxSize, ushort port, int backlog) {
-    lru = Lru(maxSize);
     Socket server = new TcpSocket();
     server.setOption(SocketOptionLevel.SOCKET, SocketOption.REUSEADDR, true);
     server.bind(new InternetAddress("0.0.0.0", port));
     server.listen(backlog);
 
-    timerQueue.start();
+    sched.start();
 
     debug writeln("Started server");
 
