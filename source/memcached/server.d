@@ -6,8 +6,7 @@ import core.atomic;
 
 import std.socket, std.stdio, std.exception, std.format;
 
-import photon, rewind.map;
-
+import photon;
 
 
 long expirationTime(long expTime) {
@@ -25,16 +24,20 @@ enum ERROR = "ERROR\r\n";
 enum CLIENT_ERROR = "CLIENT_ERROR %s\r\n";
 enum SERVER_ERROR = "SERVER_ERROR %s\r\n";
 enum STORED = "STORED\r\n";
+enum NOT_STORED = "NOT_STORED\r\n";
+enum EXISTS = "EXISTS\r\n";
+enum NOT_FOUND = "NOT_FOUND\r\n";
 
 void processCommand(const ref Parser parser, Socket client) {
     auto cmd = parser.command;
     switch(cmd) with (Command) {
     case set:
-        auto key = parser.key.idup;
-        auto data = parser.data.idup;
         if (parser.exptime >= 0) {
+            auto key = parser.key.idup;
+            auto data = parser.data.idup;
+            auto flags = parser.flags;
             auto expires = expirationTime(parser.exptime);
-            cacheSet(key, data, expires);
+            cacheSet(key, data, flags, expires);
             if (!parser.noReply) {
                 client.send(STORED);
             }
@@ -51,6 +54,66 @@ void processCommand(const ref Parser parser, Socket client) {
             }
         }
         client.send("END\r\n");
+        break;
+    case gets:
+        foreach (key; parser.keys) {
+            auto ik = cast(immutable ubyte[])key;
+            auto val = cacheGet(ik);
+            if (val) {
+                client.send(format("VALUE %s %d %d %d\r\n", cast(string)ik, 1, (*val).data.length, (*val).casUnique));
+                client.send((*val).data);
+                client.send("\r\n");
+            }
+        }
+        client.send("END\r\n");
+        break;
+    case gat:
+        foreach (key; parser.keys) {
+            auto ik = cast(immutable ubyte[])key;
+            auto expires = expirationTime(parser.exptime);
+            auto val = cacheGat(ik, expires);
+            if (val) {
+                client.send(format("VALUE %s %d %d\r\n", cast(string)ik, 1, (*val).data.length));
+                client.send((*val).data);
+                client.send("\r\n");
+            }
+        }
+        client.send("END\r\n");
+        break;
+    case gats:
+        foreach (key; parser.keys) {
+            auto ik = cast(immutable ubyte[])key;
+            auto expires = expirationTime(parser.exptime);
+            auto val = cacheGat(ik, expires);
+            if (val) {
+                client.send(format("VALUE %s %d %d %d\r\n", cast(string)ik, 1, (*val).data.length, val.casUnique));
+                client.send((*val).data);
+                client.send("\r\n");
+            }
+        }
+        client.send("END\r\n");
+        break;
+    case cas:
+        if (parser.exptime >= 0) {
+            auto ik = parser.key.idup;
+            auto data = parser.data.idup;
+            auto flags = parser.flags;
+            auto expires = expirationTime(parser.exptime);
+            auto val = cacheCas(ik, data, flags, expires, parser.casUnqiue);
+            if (!parser.noReply) {
+                final switch (val) {
+                    case CasResult.notFound:
+                        client.send(NOT_FOUND);
+                        break;
+                    case CasResult.exists:
+                        client.send(EXISTS);
+                        break;
+                    case CasResult.updated:
+                        client.send(STORED);
+                        break;
+                }
+            }
+        }
         break;
     case delete_:
         cacheDelete(cast(immutable ubyte[])parser.key);

@@ -8,5 +8,4 @@ assert(result == b'some_value')
 client.delete('some_key')
 result = client.get('some_key')
 assert(result == None)
-client.set('num', '1')
-#client.incr('num', 1)
+

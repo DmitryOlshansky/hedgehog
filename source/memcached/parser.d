@@ -136,7 +136,7 @@ public struct Parser {
 // parsed storage command variables
     Command command;
     ubyte[] key; // also used in delete command
-    ushort flags;
+    uint flags;
     long exptime;
     size_t bytes;
     long casUnqiue;
@@ -277,7 +277,7 @@ public struct Parser {
             case FLAGS:
                 size_t start = pos;
                 if (!skipNonWs()) return false;
-                flags = to!ushort(cast(char[])buf[start..pos]);
+                flags = to!uint(cast(char[])buf[start..pos]);
                 state = START_EXPTIME;
                 goto case;
             case START_EXPTIME:

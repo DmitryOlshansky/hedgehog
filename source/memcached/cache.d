@@ -2,7 +2,13 @@ module memcached.cache;
 
 import memcached.entry, memcached.lru, memcached.sched;
 import core.atomic;
-import rewind.map;
+import common.map;
+
+enum CasResult {
+    notFound,
+    exists,
+    updated
+}
 
 debug import std.stdio;
 private:
@@ -87,8 +93,17 @@ Entry* cacheGet(immutable(ubyte)[] key) {
     return e;
 }
 
-void cacheSet(immutable(ubyte)[] key, immutable(ubyte)[] data, long expires) {
-    auto entry = new Entry(key, data, expires, nextCasUnique(), State.INSERTING);
+Entry* cacheGat(immutable(ubyte)[] key, long expires) {
+    Entry* e = kv.getOrDefault(key, null);
+    if (e != null) {
+        lru.refresh(e);
+        sched.refresh(e, expires);
+    }
+    return e;
+}
+
+void cacheSet(immutable(ubyte)[] key, immutable(ubyte)[] data, uint flags, long expires) {
+    auto entry = new Entry(key, data, flags, expires, nextCasUnique(), State.INSERTING);
     auto old = kv.put(key, entry);
     auto toPurge = lru.insert(entry);
     purgeAll(toPurge);
@@ -108,3 +123,21 @@ void cacheDelete(immutable(ubyte)[] key) {
         deleteFromLruAndSched(e);
     }
 }
+
+CasResult cacheCas(immutable(ubyte)[] key, immutable(ubyte)[] data, uint flags, long expires, long casUnqiue) {
+    auto entry = new Entry(key, data, flags, expires, nextCasUnique(), State.INSERTING);
+    auto result = kv.cas(key, entry, (ref Entry* e){
+        return e.casUnique == casUnqiue;
+    });
+    if (result == null) return CasResult.notFound;
+    if (result.casUnique == entry.casUnique) return CasResult.exists;
+    auto toPurge = lru.insert(entry);
+    purgeAll(toPurge);
+    if (expires > 0) {
+        sched.schedule(entry);
+    }
+    atomicStore(entry.state, State.ACTIVE);
+    deleteFromLruAndSched(result);
+    return CasResult.updated;
+}
+
