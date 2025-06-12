@@ -4,7 +4,7 @@
 	],
 	"copyright": "Copyright © 2023, Dmitry Olshansky",
 	"dependencies": {
-		"photon": "0.5.1"
+		"photon": "0.9.0"
 	},
 	"description": "Hedgehog is a simple drop-in replacement for memcached written in D",
 	"license": "BOOST",
