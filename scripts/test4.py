@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 from pymemcache.client.base import Client
 
-client = Client('localhost:11211')
+client = Client('127.0.0.1:11211')
 client.set('key', b'value')
 result, cas_unique = client.gets('key')
 assert(result == b'value')
@@ -11,7 +11,7 @@ result, new_cas_unique = client.gets('key')
 assert(result == b'value2')
 cas_result = client.cas('key', 'value3', cas_unique) # stale cas
 assert(cas_result == False)
-client.delete('key')
+client.delete('key', noreply=False)
 cas_result = client.cas('key', 'value3', new_cas_unique) # deleted original
 assert(cas_result == None)
 result, new_cas_unique = client.gets('key')

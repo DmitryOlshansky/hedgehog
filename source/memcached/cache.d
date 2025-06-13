@@ -117,11 +117,12 @@ void cacheSet(immutable(ubyte)[] key, immutable(ubyte)[] data, uint flags, long 
     }
 }
 
-void cacheDelete(immutable(ubyte)[] key) {
+bool cacheDelete(immutable(ubyte)[] key) {
     Entry* e = kv.remove(key);
     if (e != null) {
         deleteFromLruAndSched(e);
     }
+    return e != null;
 }
 
 CasResult cacheCas(immutable(ubyte)[] key, immutable(ubyte)[] data, uint flags, long expires, long casUnqiue) {

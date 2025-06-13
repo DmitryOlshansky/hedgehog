@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 import socket
 
-sock = socket.create_connection(("localhost", 11211))
+sock = socket.create_connection(("127.0.0.1", 11211))
 # <command name> <key> <flags> <exptime> <bytes> [noreply]\r\n
 # <data>\r\n
 sock.send(b"set abc 1 1 2\r\n12\r\n")

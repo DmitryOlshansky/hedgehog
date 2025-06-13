@@ -8,6 +8,13 @@ import std.socket, std.stdio, std.exception, std.format;
 
 import photon;
 
+import core.stdc.string : strlen, strerror;
+import core.stdc.errno;
+
+string errnoString() {    
+    auto s = strerror(errno);
+    return s[0..s.strlen].idup;
+}
 
 long expirationTime(long expTime) {
     if (expTime <= 0) {
@@ -27,6 +34,32 @@ enum STORED = "STORED\r\n";
 enum NOT_STORED = "NOT_STORED\r\n";
 enum EXISTS = "EXISTS\r\n";
 enum NOT_FOUND = "NOT_FOUND\r\n";
+
+void processModify(alias modify)(
+    const ref Parser parser,
+    Socket client
+) {
+    if (parser.exptime >= 0) {
+        auto ik = parser.key.idup;
+        auto data = parser.data.idup;
+        auto flags = parser.flags;
+        auto expires = expirationTime(parser.exptime);
+        for (;;) {
+            auto val = cacheGet(ik);
+            if (!val) {
+                if (!parser.noReply) client.send(NOT_FOUND);
+                break;
+            }
+            auto toInsert = modify(val.data, data);
+            auto casUnique = val.casUnique;
+            auto result = cacheCas(ik, toInsert, flags, expires, casUnique);
+            if (result == CasResult.updated) {
+                if(!parser.noReply) client.send(STORED);
+                break;
+            }
+        }
+    }
+}
 
 void processCommand(const ref Parser parser, Socket client) {
     auto cmd = parser.command;
@@ -116,7 +149,20 @@ void processCommand(const ref Parser parser, Socket client) {
         }
         break;
     case delete_:
-        cacheDelete(cast(immutable ubyte[])parser.key);
+        auto resp = cacheDelete(cast(immutable ubyte[])parser.key);
+        if (!parser.noReply) {
+            if(resp) {
+                client.send(STORED);
+            } else {
+                client.send(NOT_FOUND);
+            }
+        }
+        break;
+    case append:
+        processModify!((a,b) => a ~ b)(parser, client);
+        break;
+    case prepend:
+        processModify!((a,b) => b ~ a)(parser, client);
         break;
     default:
         client.send(SERVER_ERROR.format("Unimplemented"));
@@ -133,7 +179,9 @@ void serverWorker(Socket client) {
                 client.close();
                 break;
             }
-            enforce(size > 0);
+            if(size < 0) {
+                throw new Exception("Error on connection " ~ errnoString());
+            }
             parser.feed(buffer[0..size]);
             while (parser.parse())
                 processCommand(parser, client);
