@@ -61,6 +61,23 @@ void processModify(alias modify)(
     }
 }
 
+struct iovec {
+    void* iov_base;
+    size_t iov_len;
+}
+
+extern(C) ssize_t writev(int fd, const iovec *vector, int count);
+
+
+void sendv(T...)(int fd, T bufs) {
+    iovec[bufs.length] vecs;
+    foreach (i, buf; bufs) {
+        vecs[i].iov_base = cast(void*)buf.ptr;
+        vecs[i].iov_len = buf.length;
+    }
+    writev(fd, vecs.ptr, bufs.length);
+}
+
 void processCommand(const ref Parser parser, Socket client) {
     auto cmd = parser.command;
     switch(cmd) with (Command) {
@@ -81,9 +98,11 @@ void processCommand(const ref Parser parser, Socket client) {
             auto ik = cast(immutable ubyte[])key;
             auto val = cacheGet(ik);
             if (val) {
-                client.send(format("VALUE %s %d %d\r\n", cast(string)ik, 1, (*val).data.length));
-                client.send((*val).data);
-                client.send("\r\n");
+                sendv(client.handle, 
+                    format("VALUE %s %d %d\r\n", cast(string)ik, 1, (*val).data.length),
+                    (*val).data,
+                    "\r\n"
+                );
             }
         }
         client.send("END\r\n");
@@ -93,9 +112,11 @@ void processCommand(const ref Parser parser, Socket client) {
             auto ik = cast(immutable ubyte[])key;
             auto val = cacheGet(ik);
             if (val) {
-                client.send(format("VALUE %s %d %d %d\r\n", cast(string)ik, 1, (*val).data.length, (*val).casUnique));
-                client.send((*val).data);
-                client.send("\r\n");
+                sendv(client.handle, 
+                    format("VALUE %s %d %d %d\r\n", cast(string)ik, 1, (*val).data.length, (*val).casUnique),
+                    (*val).data,
+                    "\r\n"
+                );
             }
         }
         client.send("END\r\n");
