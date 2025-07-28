@@ -127,9 +127,11 @@ void processCommand(const ref Parser parser, Socket client) {
             auto expires = expirationTime(parser.exptime);
             auto val = cacheGat(ik, expires);
             if (val) {
-                client.send(format("VALUE %s %d %d\r\n", cast(string)ik, 1, (*val).data.length));
-                client.send((*val).data);
-                client.send("\r\n");
+                sendv(client.handle, 
+                    format("VALUE %s %d %d\r\n", cast(string)ik, 1, (*val).data.length),
+                    (*val).data,
+                    "\r\n"
+                );
             }
         }
         client.send("END\r\n");
@@ -140,9 +142,11 @@ void processCommand(const ref Parser parser, Socket client) {
             auto expires = expirationTime(parser.exptime);
             auto val = cacheGat(ik, expires);
             if (val) {
-                client.send(format("VALUE %s %d %d %d\r\n", cast(string)ik, 1, (*val).data.length, val.casUnique));
-                client.send((*val).data);
-                client.send("\r\n");
+                sendv(client.handle, 
+                    format("VALUE %s %d %d %d\r\n", cast(string)ik, 1, (*val).data.length, (*val).casUnique),
+                    (*val).data,
+                    "\r\n"
+                );
             }
         }
         client.send("END\r\n");
