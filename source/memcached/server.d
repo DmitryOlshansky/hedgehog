@@ -205,6 +205,7 @@ void serverWorker(Socket client) {
                 break;
             }
             if(size < 0) {
+                client.close();
                 throw new Exception("Error on connection " ~ errnoString());
             }
             parser.feed(buffer[0..size]);

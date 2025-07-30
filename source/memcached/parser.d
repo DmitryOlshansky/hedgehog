@@ -2,6 +2,7 @@ module memcached.parser;
 // https://github.com/memcached/memcached/blob/master/doc/protocol.txt
 
 static import std.ascii;
+import core.stdc.stdlib, core.stdc.string;
 import std.algorithm, std.conv, std.exception;
 
 private:
@@ -130,7 +131,9 @@ bool isWhite(ubyte c) { return isWhiteTable[c]; }
 
 public struct Parser {
 // parser state
-    ubyte[] buf;
+    ubyte* buf;
+    size_t bufLen;
+    size_t bufCap;
     size_t pos;
     State state = State.START_COMMAND_NAME;
 // parsed storage command variables
@@ -148,11 +151,17 @@ public struct Parser {
     ubyte[][] keys;
     
     void feed(const(ubyte)[] slice) {
-        buf ~= slice;
+        if (bufCap < bufLen + slice.length) {
+            if (bufCap == 0) bufCap = 2048;
+            bufCap = max(bufLen + slice.length, bufCap * 2);
+            buf = cast(ubyte*)realloc(buf, bufCap);
+        }
+        buf[bufLen .. bufLen + slice.length] = slice[];
+        bufLen += slice.length;
     }
 
     bool skipWs() {
-        for (size_t i=pos; i<buf.length; i++){
+        for (size_t i=pos; i<bufLen; i++){
             if (!buf[i].isWhite()) {
                 pos = i;
                 return true;
@@ -162,7 +171,7 @@ public struct Parser {
     }
 
     bool skipNonWs() {
-        for (size_t i=pos; i<buf.length; i++) {
+        for (size_t i=pos; i<bufLen; i++) {
             if (buf[i].isWhite() || buf[i] == '\r') {
                 pos = i;
                 return true;
@@ -183,10 +192,9 @@ public struct Parser {
             casUnqiue = 0;
             noReply = false;
             data = null;
-            size_t rem = buf.length - pos;
-            copy(buf[pos..$], buf[0..rem]);
-            buf = buf[0..rem];
-            buf.assumeSafeAppend();
+            size_t rem = bufLen - pos;
+            memmove(buf, buf + pos, rem);
+            bufLen = rem;
             pos = 0;
             state = State.START_COMMAND_NAME;
         }
@@ -242,7 +250,7 @@ public struct Parser {
             case NEXT_KEY:
                 if (!skipWs()) return false;
                 if (buf[pos] == '\r') {
-                    if (pos+1 == buf.length) return false;
+                    if (pos+1 == bufLen) return false;
                     enforce(buf[pos+1] == '\n');
                     pos += 2;
                     state = END;
@@ -319,7 +327,7 @@ public struct Parser {
             case SET_START_NOREPLY:
                 if (!skipWs()) return false;
                 if (buf[pos] == '\r') {
-                    if (pos+1 == buf.length) return false;
+                    if (pos+1 == bufLen) return false;
                     enforce(buf[pos+1] == '\n');
                     pos+=2;
                     noReply = false;
@@ -330,7 +338,7 @@ public struct Parser {
                     goto case SET_NOREPLY;
                 }
             case SET_NOREPLY:
-                if (pos + 9 > buf.length) return false;
+                if (pos + 9 > bufLen) return false;
                 enforce(cast(char[])buf[pos..pos+9] == "noreply\r\n");
                 noReply = true;
                 pos += 9;
@@ -349,7 +357,7 @@ public struct Parser {
             case START_NOREPLY_END:
                 if (!skipWs()) return false;
                 if (buf[pos] == '\r') {
-                    if (pos+1 == buf.length) return false;
+                    if (pos+1 == bufLen) return false;
                     enforce(buf[pos+1] == '\n');
                     pos+=2;
                     noReply = false;
@@ -360,14 +368,14 @@ public struct Parser {
                     goto case NOREPLY_END;
                 }
             case NOREPLY_END:
-                if (pos + 9 > buf.length) return false;
+                if (pos + 9 > bufLen) return false;
                 enforce(cast(char[])buf[pos..pos+9] == "noreply\r\n");
                 noReply = true;
                 pos += 9;
                 state = END;
                 goto case END;
             case DATA:
-                if (pos + bytes + 2 > buf.length) return false;
+                if (pos + bytes + 2 > bufLen) return false;
                 data = buf[pos..pos+bytes];
                 pos += bytes;
                 state = END;
@@ -379,6 +387,10 @@ public struct Parser {
             }
         }
         assert(0);
+    }
+
+    ~this() {
+        free(buf);
     }
 }
 
