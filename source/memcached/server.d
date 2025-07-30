@@ -94,7 +94,7 @@ void processCommand(const ref Parser parser, Socket client) {
         }
         break;
     case get:
-        foreach (key; parser.keys) {
+        foreach (key; parser.keys[0..parser.keysLen]) {
             auto ik = cast(immutable ubyte[])key;
             auto val = cacheGet(ik);
             if (val) {
@@ -108,7 +108,7 @@ void processCommand(const ref Parser parser, Socket client) {
         client.send("END\r\n");
         break;
     case gets:
-        foreach (key; parser.keys) {
+        foreach (key; parser.keys[0..parser.keysLen]) {
             auto ik = cast(immutable ubyte[])key;
             auto val = cacheGet(ik);
             if (val) {
@@ -122,7 +122,7 @@ void processCommand(const ref Parser parser, Socket client) {
         client.send("END\r\n");
         break;
     case gat:
-        foreach (key; parser.keys) {
+        foreach (key; parser.keys[0..parser.keysLen]) {
             auto ik = cast(immutable ubyte[])key;
             auto expires = expirationTime(parser.exptime);
             auto val = cacheGat(ik, expires);
@@ -137,7 +137,7 @@ void processCommand(const ref Parser parser, Socket client) {
         client.send("END\r\n");
         break;
     case gats:
-        foreach (key; parser.keys) {
+        foreach (key; parser.keys[0..parser.keysLen]) {
             auto ik = cast(immutable ubyte[])key;
             auto expires = expirationTime(parser.exptime);
             auto val = cacheGat(ik, expires);

@@ -148,7 +148,9 @@ public struct Parser {
 // incr/decr value
     ulong value;
 // parsed get/gets command variables
-    ubyte[][] keys;
+    ubyte[]* keys;
+    size_t keysLen;
+    size_t keysCap;
     
     void feed(const(ubyte)[] slice) {
         if (bufCap < bufLen + slice.length) {
@@ -184,8 +186,7 @@ public struct Parser {
         if (state == State.END) {
             command = Command.none;
             key = null;
-            keys = keys[0..0];
-            keys.assumeSafeAppend();
+            keysLen = 0;
             flags = 0;
             exptime = 0;
             bytes = 0;
@@ -224,7 +225,11 @@ public struct Parser {
                 if (command == Command.get || command == Command.gets
                     || command == Command.gat || command == Command.gats) {
                     state = NEXT_KEY;
-                    keys ~= buf[start..pos];
+                    if (keysCap == keysLen) {
+                        keysCap = keysCap + 10;
+                        keys = cast(ubyte[]*)realloc(keys, keysCap * ubyte[].sizeof);
+                    }
+                    keys[keysLen++] = buf[start..pos];
                     goto case NEXT_KEY;
                 }
                 else if (command == Command.delete_) {
@@ -390,6 +395,7 @@ public struct Parser {
     }
 
     ~this() {
+        free(keys);
         free(buf);
     }
 }
