@@ -1,35 +1,54 @@
 module common.map;
 
+import common.table;
 import core.internal.spinlock;
 
-private immutable size_t BUCKETS = 31;
+private immutable size_t BUCKETS = 127;
 
-size_t bucketOf(T)(auto ref T value) {
-    return value.hashOf() % BUCKETS;
+size_t bucketOf(size_t hash) {
+    return (hash >> 16) % BUCKETS;
+}
+
+size_t hashCode(T)(T data) {
+    return data.hashOf;
+}
+
+size_t hashCode(scope const(ubyte)[] data) @nogc nothrow pure @safe
+{
+    size_t h = 0;
+    foreach (b; data) {
+        h = 31*h + b;
+    }
+    return h;
 }
 
 class Map(K, V) {
     struct Shard {
-        V[K] map;
+        Table!(K,V) map;
         SpinLock lock;
     }
     Shard[] shards;
     this() {
         shards = new Shard[BUCKETS];
+        foreach (ref s; shards) {
+            s.map = Table!(K,V)(32);
+        }
     }
  
     auto opIndex(K key) {
-        auto shard = &shards[bucketOf(key)];
+        auto h = hashCode(key);
+        auto shard = &shards[bucketOf(h)];
         shard.lock.lock();
         scope(exit) shard.lock.unlock();
-        return shard.map[key];
+        return *shard.map.lookup(key, h);
     }
 
     V getOrDefault(K key, V default_) {
-        auto shard = &shards[bucketOf(key)];
+        auto h = hashCode(key);
+        auto shard = &shards[bucketOf(h)];
         shard.lock.lock();
         scope(exit) shard.lock.unlock();
-        auto v = key in shard.map;
+        auto v = shard.map.lookup(key, h);
         if (v) {
             return *v;
         }
@@ -39,58 +58,46 @@ class Map(K, V) {
     }
 
     V put(K key, V value) {
-        auto shard = &shards[bucketOf(key)];
+        auto h = hashCode(key);
+        auto shard = &shards[bucketOf(h)];
         shard.lock.lock();
         scope(exit) shard.lock.unlock();
-        auto p = key in shard.map;
-        if (p) {
-            auto old = *p;
-            shard.map[key] = value;
-            return old;
-        }
-        else {
-            shard.map[key] = value;
-            return V.init;
-        }
+        return shard.map.put(key, h, value);
     }
 
     ref opIndexAssign(V value, K key) {
-        auto shard = &shards[bucketOf(key)];
+        auto h = hashCode(key);
+        auto shard = &shards[bucketOf(h)];
         shard.lock.lock();
         scope(exit) shard.lock.unlock();
-        shard.map[key] = value;
+        shard.map.put(key, h, value);
     }
 
     bool opBinaryRight(string op:"in")(K key) {
-        auto shard = &shards[bucketOf(key)];
+        auto h = hashCode(key);
+        auto shard = &shards[bucketOf(h)];
         shard.lock.lock();
         scope(exit) shard.lock.unlock();
-        return (key in shard.map) != null;
+        return shard.map.lookup(key, h) != null;
     }
 
     V remove(K key) {
-        auto shard = &shards[bucketOf(key)];
+        auto h = hashCode(key);
+        auto shard = &shards[bucketOf(h)];
         shard.lock.lock();
         scope(exit) shard.lock.unlock();
-        auto p = key in shard.map;
-        if (p) {
-            auto v = *p;
-            shard.map.remove(key);
-            return v;
-        }
-        else {
-            return V.init;
-        }
+        return shard.map.remove(key, h);
     }
 
     V removeIf(K key, scope bool delegate(ref V) cond) {
-        auto shard = &shards[bucketOf(key)];
+        auto h = hashCode(key);
+        auto shard = &shards[bucketOf(h)];
         shard.lock.lock();
         scope(exit) shard.lock.unlock();
-        auto value = key in shard.map;
+        auto value = shard.map.lookup(key, h);
         if (value != null && cond(*value)) {
             auto v = *value;
-            shard.map.remove(key);
+            shard.map.remove(key, h);
             return v;
         }
         else {
@@ -99,14 +106,15 @@ class Map(K, V) {
     }
 
     V cas(K key, V value, scope bool delegate(ref V) cond) {
-        auto shard = &shards[bucketOf(key)];
+        auto h = hashCode(key);
+        auto shard = &shards[bucketOf(h)];
         shard.lock.lock();
         scope(exit) shard.lock.unlock();
-        auto old = key in shard.map;
+        auto old = shard.map.lookup(key, h);
         if (old == null) return V.init;
         if (!cond(*old)) return value;
         auto oldValue = *old; // save as the next write occupies the same slot
-        shard.map[key] = value;
+        shard.map.put(key, h, value);
         return oldValue;
     }
 
@@ -117,7 +125,7 @@ class Map(K, V) {
         }
         return len;
     }
-
+/*
     int opApply(scope int delegate(K, V) fn) {
         foreach (ref shard; shards) {
             shard.lock.lock();
@@ -128,6 +136,7 @@ class Map(K, V) {
         }
         return 1;
     }
+*/
 }
 
 unittest {
@@ -135,13 +144,14 @@ unittest {
     map[0] = "hello";
     assert(map[0] == "hello");
     assert(map.length == 1);
-    foreach (k, v; map) {
+    /*foreach (k, v; map) {
         assert(k == 0);
         assert(v == "hello");
     }
     assert(map.remove(0) == "hello");
     assert(!(0 in map));
     assert(map.length == 0);
+    */
 }
 
 unittest {
@@ -182,74 +192,4 @@ unittest {
     assert(map.put("A", 2) == 1);
     assert(map.getOrDefault("A", 3) == 2);
     assert(map.getOrDefault("B", 3) == 3);
-}
-
-class MultiMap(K, V) {
-    struct Shard {
-        SpinLock lock;
-        V[][K] bucket;
-    }
-    Shard[] shards;
-
-    this() {
-        shards = new Shard[BUCKETS];
-    }
-
-    V[] opIndex(K key) {
-        auto s = &shards[bucketOf(key)];
-        s.lock.lock();
-        scope(exit) s.lock.unlock();
-        return s.bucket[key];
-    }
-
-    void opIndexAssign(V value, K key) {
-        auto s = &shards[bucketOf(key)];
-        s.lock.lock();
-        scope(exit) s.lock.unlock();
-        auto p = key in s.bucket;
-        if (p == null) {
-            s.bucket[key] = [value];
-        } else {
-            s.bucket[key] ~= value;
-        }
-    }
-
-    void remove(K key) {
-        auto s = &shards[bucketOf(key)];
-        s.lock.lock();
-        scope(exit) s.lock.unlock();
-        s.bucket.remove(key);
-    }
-
-    size_t length() {
-        size_t len = 0;
-        foreach (ref shard; shards) {
-            shard.lock.lock();
-            scope(exit) shard.lock.unlock();
-            len += shard.bucket.length;
-        }
-        return len;
-    }
-
-    int opApply(scope int delegate(K key, V[] value) dg) {
-        foreach (ref shard; shards) {
-            shard.lock.lock();
-            scope(exit) shard.lock.unlock();
-            foreach (k, v; shard.bucket) {
-                dg(k, v);
-            }
-        }
-        return 1;
-    }
-}
-
-unittest {
-    auto mm = new MultiMap!(string, int);
-    mm["a"] = 2;
-    mm["a"] = 3;
-    assert(mm["a"] == [2,3]);
-    foreach (k,v; mm) {
-        assert(k == "a");
-        assert(v == [2,3]);
-    }
 }

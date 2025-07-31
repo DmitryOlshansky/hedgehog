@@ -401,7 +401,7 @@ public struct Parser {
 }
 
 version(unittest) {
-    void testParse(T)(T[] command, scope void delegate(Parser)[] dgs...) {
+    void testParse(T)(T[] command, scope void delegate(ref Parser)[] dgs...) {
         Parser parser;
         // feed all at once
         parser.feed(cast(const(ubyte)[])command);
@@ -425,28 +425,28 @@ version(unittest) {
 unittest {
     testParse(
         "add key 0 0 1\r\nA\r\nreplace key 0 1 1 noreply\r\nB\r\n"
-        ~ "append key 1 1 1 noreply\r\nC\r\nprepend key 0 0 1\r\nD\r\n", (parser) {
+        ~ "append key 1 1 1 noreply\r\nC\r\nprepend key 0 0 1\r\nD\r\n", (ref parser) {
         assert(parser.command == Command.add);
         assert(cast(string)parser.key == "key");
         assert(parser.flags == 0);
         assert(parser.exptime == 0);
         assert(!parser.noReply);
         assert(cast(string)parser.data == "A");
-    }, (parser) {
+    }, (ref parser) {
         assert(parser.command == Command.replace);
         assert(cast(string)parser.key == "key");
         assert(parser.flags == 0);
         assert(parser.exptime == 1);
         assert(parser.noReply);
         assert(cast(string)parser.data == "B");
-    }, (parser) {
+    }, (ref parser) {
         assert(parser.command == Command.append);
         assert(cast(string)parser.key == "key");
         assert(parser.flags == 1);
         assert(parser.exptime == 1);
         assert(parser.noReply);
         assert(cast(string)parser.data == "C");
-    }, (parser) {
+    }, (ref parser) {
         assert(parser.command == Command.prepend);
         assert(cast(string)parser.key == "key");
         assert(parser.flags == 0);
@@ -457,7 +457,7 @@ unittest {
 }
 
 unittest {
-    testParse("set some_key 0 0 10 noreply\r\nsome_value\r\ngets some_key\r\n", (parser) {
+    testParse("set some_key 0 0 10 noreply\r\nsome_value\r\ngets some_key\r\n", (ref parser) {
         assert(parser.command == Command.set);
         assert(cast(string)parser.key == "some_key");
         assert(parser.flags == 0);
@@ -465,23 +465,23 @@ unittest {
         assert(parser.bytes == 10);
         assert(parser.noReply == true);
         assert(cast(string)parser.data == "some_value");
-    }, (parser) {
+    }, (ref parser) {
         assert(parser.command == Command.gets);
-        assert(parser.keys.length == 1);
+        assert(parser.keysLen == 1);
         assert(cast(string)parser.keys[0] == "some_key");
     });
 }
 
 unittest {
-    testParse("get k1 k2\r\n", (parser) {
-        assert(parser.keys.length == 2);
+    testParse("get k1 k2\r\n", (ref parser) {
+        assert(parser.keysLen == 2);
         assert(cast(string)parser.keys[0] == "k1");
         assert(cast(string)parser.keys[1] == "k2");
     });
 }
 
 unittest {
-    testParse("set key 1 2 3\r\nval\r\n", (parser) {
+    testParse("set key 1 2 3\r\nval\r\n", (ref parser) {
         assert(parser.command == Command.set);
         assert(parser.flags == 1);
         assert(parser.exptime == 2);
@@ -491,16 +491,16 @@ unittest {
 
 unittest {
     ubyte[] command = [115, 101, 116, 32, 97, 98, 99, 32, 49, 32, 49, 32, 50, 13, 10, 49, 50, 13, 10];
-    testParse(command, (parser) {
+    testParse(command, (ref parser) {
     });
 }
 
 unittest {
-    testParse("delete key\r\ndelete key2 noreply\r\n", (parser) {
+    testParse("delete key\r\ndelete key2 noreply\r\n", (ref parser) {
         assert(parser.command == Command.delete_);
         assert(cast(string)parser.key == "key");
         assert(!parser.noReply);
-    }, (parser) {
+    }, (ref parser) {
         assert(parser.command == Command.delete_);
         assert(cast(string)parser.key == "key2");
         assert(parser.noReply);
@@ -508,22 +508,22 @@ unittest {
 }
 
 unittest {
-    testParse("incr key 2\r\nincr key2 3 noreply\r\ndecr key3 4000000000\r\ndecr key4 1 noreply\r\n", (parser) {
+    testParse("incr key 2\r\nincr key2 3 noreply\r\ndecr key3 4000000000\r\ndecr key4 1 noreply\r\n", (ref parser) {
         assert(parser.command == Command.incr);
         assert(cast(string)parser.key == "key");
         assert(parser.value == 2);
         assert(!parser.noReply);
-    }, (parser) {
+    }, (ref parser) {
         assert(parser.command == Command.incr);
         assert(cast(string)parser.key == "key2");
         assert(parser.value == 3);
         assert(parser.noReply);
-    }, (parser) { 
+    }, (ref parser) { 
         assert(parser.command == Command.decr);
         assert(cast(string)parser.key == "key3");
         assert(parser.value == 4_000_000_000);
         assert(!parser.noReply);
-    }, (parser) {
+    }, (ref parser) {
         assert(parser.command == Command.decr);
         assert(cast(string)parser.key == "key4");
         assert(parser.value == 1);
@@ -532,12 +532,12 @@ unittest {
 }
 
 unittest {
-    testParse("touch k 12 noreply\r\ntouch k2 23\r\n", (parser) {
+    testParse("touch k 12 noreply\r\ntouch k2 23\r\n", (ref parser) {
         assert(parser.command == Command.touch);
         assert(cast(string)parser.key == "k");
         assert(parser.exptime == 12);
         assert(parser.noReply);
-    }, (parser) {
+    }, (ref parser) {
         assert(parser.command == Command.touch);
         assert(cast(string)parser.key == "k2");
         assert(parser.exptime == 23);
@@ -546,19 +546,19 @@ unittest {
 }
 
 unittest {
-    testParse("gat 12 key1 key2\r\ngats 23 key3\r\n", (parser) {
+    testParse("gat 12 key1 key2\r\ngats 23 key3\r\n", (ref parser) {
         assert(parser.command == Command.gat);
-        assert(cast(string[])parser.keys == ["key1", "key2"]);
+        assert(cast(string[])(parser.keys[0..parser.keysLen]) == ["key1", "key2"]);
         assert(parser.exptime == 12);
-    }, (parser) {
+    }, (ref parser) {
         assert(parser.command == Command.gats);
-        assert(cast(string[])parser.keys == ["key3"]);
+        assert(cast(string[])parser.keys[0..parser.keysLen] == ["key3"]);
         assert(parser.exptime == 23);
     });
 }
 
 unittest {
-    testParse("cas key 0 1 5 321\r\nvalue\r\ncas key 0 1 5 123 noreply\r\nvalue\r\n", (parser) {
+    testParse("cas key 0 1 5 321\r\nvalue\r\ncas key 0 1 5 123 noreply\r\nvalue\r\n", (ref parser) {
         assert(parser.command == Command.cas);
         assert(cast(string)parser.key == "key");
         assert(parser.flags == 0);
@@ -566,7 +566,7 @@ unittest {
         assert(cast(string)parser.data == "value");
         assert(!parser.noReply);
         assert(parser.casUnqiue == 321);
-    }, (parser) {
+    }, (ref parser) {
         assert(parser.command == Command.cas);
         assert(cast(string)parser.key == "key");
         assert(parser.flags == 0);
