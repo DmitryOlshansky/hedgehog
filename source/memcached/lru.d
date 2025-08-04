@@ -3,6 +3,7 @@ module memcached.lru;
 import common.intrusive_queue;
 
 import core.internal.spinlock, core.atomic;
+import memcached.entry;
 
 struct Lru(T, alias sizeOf) {
     size_t availMemory;
@@ -56,6 +57,7 @@ struct Lru(T, alias sizeOf) {
         if (entry.next3 != null) { // not already removed from LRU
             purgeQueue = remove!"3"(purgeQueue, entry);
             availMemory += size;
+            entry.release();
         }
     }
 }

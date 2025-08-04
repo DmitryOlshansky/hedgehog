@@ -31,6 +31,7 @@ __gshared KV kv = new KV();
 alias SCHED = Sched!(Entry, unixTime, (Entry* e) {
     debug writeln("Expired ", cast(string)e.key);
     deleteFromKvAndLru(e);
+    e.release();
 });
 
 __gshared SCHED sched;
@@ -40,18 +41,20 @@ __gshared LRU lru;
 
 void deleteFromKvAndLru(Entry* e) {
     if (startDeletion(e)) {
-        kv.removeIf(e.key, (ref Entry* actual) {
+        auto removed = kv.removeIf(e.key, (ref Entry* actual) {
             return actual == e;
         });
+        if (removed) e.release();
         lru.purge(e);
     }
 }
 
 void deleteFromKvAndSched(Entry* e) {
     if (startDeletion(e)) {
-        kv.removeIf(e.key, (ref Entry* actual) {
+        auto removed = kv.removeIf(e.key, (ref Entry* actual) {
             return actual == e;
         });
+        if (removed) e.release();
         if (e.expTime > 0) {
             sched.deschedule(e);
         }
@@ -70,7 +73,9 @@ void deleteFromLruAndSched(Entry* e) {
 void purgeAll(Entry* e) {
     while (e != null) {
         deleteFromKvAndSched(e);
-        e = e.next;
+        auto next = e.next;
+        e.release();
+        e = next;
     }
 }
 
@@ -103,17 +108,19 @@ Entry* cacheGat(immutable(ubyte)[] key, long expires) {
 }
 
 void cacheSet(immutable(ubyte)[] key, immutable(ubyte)[] data, uint flags, long expires) {
-    auto entry = new Entry(key, data, flags, expires, nextCasUnique(), State.INSERTING);
+    auto entry = allocate(2, key, data, flags, expires, nextCasUnique(), State.INSERTING);
     auto old = kv.put(key, entry);
     auto toPurge = lru.insert(entry);
     purgeAll(toPurge);
     if (expires > 0) {
+        entry.acquire();
         sched.schedule(entry);
     }
     // new entry is stored everywhere, now it can be deleted
     atomicStore(entry.state, State.ACTIVE);
     if (old != null) {
         deleteFromLruAndSched(old);
+        old.release();
     }
 }
 
@@ -121,21 +128,31 @@ bool cacheDelete(immutable(ubyte)[] key) {
     Entry* e = kv.remove(key);
     if (e != null) {
         deleteFromLruAndSched(e);
+        e.release();
     }
     return e != null;
 }
 
 CasResult cacheCas(immutable(ubyte)[] key, immutable(ubyte)[] data, uint flags, long expires, long casUnqiue) {
-    auto entry = new Entry(key, data, flags, expires, nextCasUnique(), State.INSERTING);
+    auto entry = allocate(1, key, data, flags, expires, nextCasUnique(), State.INSERTING);
     auto result = kv.cas(key, entry, (ref Entry* e){
         return e.casUnique == casUnqiue;
     });
-    if (result == null) return CasResult.notFound;
-    if (result.casUnique == entry.casUnique) return CasResult.exists;
+    if (result == null) {
+        entry.release();
+        return CasResult.notFound;
+    }
+    if (result.casUnique == entry.casUnique) {
+        entry.release();
+        return CasResult.exists;
+    }
+    entry.acquire();
     auto toPurge = lru.insert(entry);
     purgeAll(toPurge);
     if (expires > 0) {
+        entry.acquire();
         sched.schedule(entry);
+
     }
     atomicStore(entry.state, State.ACTIVE);
     deleteFromLruAndSched(result);

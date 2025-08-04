@@ -34,14 +34,6 @@ class Map(K, V) {
             s.map = Table!(K,V)(32);
         }
     }
- 
-    auto opIndex(K key) {
-        auto h = hashCode(key);
-        auto shard = &shards[bucketOf(h)];
-        shard.lock.lock();
-        scope(exit) shard.lock.unlock();
-        return *shard.map.lookup(key, h);
-    }
 
     V getOrDefault(K key, V default_) {
         auto h = hashCode(key);
@@ -50,6 +42,7 @@ class Map(K, V) {
         scope(exit) shard.lock.unlock();
         auto v = shard.map.lookup(key, h);
         if (v) {
+            (*v).acquire();
             return *v;
         }
         else {
@@ -63,14 +56,6 @@ class Map(K, V) {
         shard.lock.lock();
         scope(exit) shard.lock.unlock();
         return shard.map.put(key, h, value);
-    }
-
-    ref opIndexAssign(V value, K key) {
-        auto h = hashCode(key);
-        auto shard = &shards[bucketOf(h)];
-        shard.lock.lock();
-        scope(exit) shard.lock.unlock();
-        shard.map.put(key, h, value);
     }
 
     bool opBinaryRight(string op:"in")(K key) {

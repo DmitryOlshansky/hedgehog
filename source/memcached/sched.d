@@ -1,6 +1,6 @@
 module memcached.sched;
 
-import common.intrusive_queue;
+import common.intrusive_queue, memcached.entry;
 
 import core.atomic, core.time, core.thread;
 
@@ -132,6 +132,7 @@ public struct Sched(T, alias time, alias onExpiration) {
                 case REMOVE:
                     if(reversed.item.next2 != null) {
                         timerSlots[slot] = remove!"2"(timerSlots[slot], reversed.item);
+                        reversed.item.release();
                     }
                     break;
                 case REFRESH:

@@ -1,8 +1,8 @@
 module memcached.server;
 
-import memcached.parser, memcached.cache;
+import memcached.parser, memcached.cache, memcached.entry;
 
-import core.atomic;
+import core.atomic, core.stdc.stdlib;
 
 import std.socket, std.stdio, std.exception, std.format;
 
@@ -40,8 +40,8 @@ void processModify(alias modify)(
     Socket client
 ) {
     if (parser.exptime >= 0) {
-        auto ik = parser.key.idup;
-        auto data = parser.data.idup;
+        auto ik = mallocedCopy(parser.key);
+        auto data = mallocedCopy(parser.data);
         auto flags = parser.flags;
         auto expires = expirationTime(parser.exptime);
         for (;;) {
@@ -55,6 +55,7 @@ void processModify(alias modify)(
             auto result = cacheCas(ik, toInsert, flags, expires, casUnique);
             if (result == CasResult.updated) {
                 if(!parser.noReply) client.send(STORED);
+                free(cast(void*)data.ptr);
                 break;
             }
         }
@@ -83,8 +84,8 @@ void processCommand(const ref Parser parser, Socket client) {
     switch(cmd) with (Command) {
     case set:
         if (parser.exptime >= 0) {
-            auto key = parser.key.idup;
-            auto data = parser.data.idup;
+            auto key = mallocedCopy(parser.key);
+            auto data = mallocedCopy(parser.data);
             auto flags = parser.flags;
             auto expires = expirationTime(parser.exptime);
             cacheSet(key, data, flags, expires);
@@ -103,6 +104,7 @@ void processCommand(const ref Parser parser, Socket client) {
                     (*val).data,
                     "\r\n"
                 );
+                val.release();
             }
         }
         client.send("END\r\n");
@@ -117,6 +119,7 @@ void processCommand(const ref Parser parser, Socket client) {
                     (*val).data,
                     "\r\n"
                 );
+                val.release();
             }
         }
         client.send("END\r\n");
@@ -132,6 +135,7 @@ void processCommand(const ref Parser parser, Socket client) {
                     (*val).data,
                     "\r\n"
                 );
+                val.release();
             }
         }
         client.send("END\r\n");
@@ -147,6 +151,7 @@ void processCommand(const ref Parser parser, Socket client) {
                     (*val).data,
                     "\r\n"
                 );
+                val.release();
             }
         }
         client.send("END\r\n");
