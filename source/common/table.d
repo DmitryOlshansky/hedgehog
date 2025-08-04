@@ -38,6 +38,7 @@ public:
         while (*ptr) {
             if ((*ptr).hash == hash && (*ptr).key == key) {
                 auto old = (*ptr).value;
+                (*ptr).key = key;
                 (*ptr).value = value;
                 return old;
             }
